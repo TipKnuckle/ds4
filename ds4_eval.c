@@ -2419,13 +2419,10 @@ static int eval_max_prompt_tokens(ds4_engine *engine,
                                   const eval_config *cfg,
                                   const eval_case *cases,
                                   int ncases,
-                                  int ctx_for_think_mode,
                                   int *max_case_out)
 {
     int max_prompt = 0;
     int max_case = -1;
-    const ds4_think_mode think_mode =
-        ds4_think_mode_for_context(cfg->think_mode, ctx_for_think_mode);
 
     for (int i = 0; i < ncases; i++) {
         char *question = build_question_prompt(&cases[i]);
@@ -2434,7 +2431,8 @@ static int eval_max_prompt_tokens(ds4_engine *engine,
             exit(1);
         }
         ds4_tokens prompt = {0};
-        ds4_encode_chat_prompt(engine, eval_system_prompt(), question, think_mode, &prompt);
+        ds4_encode_chat_prompt(engine, eval_system_prompt(), question,
+                               cfg->think_mode, &prompt);
         if (prompt.len > max_prompt) {
             max_prompt = prompt.len;
             max_case = i;
@@ -2453,43 +2451,20 @@ static int eval_auto_context_size(ds4_engine *engine,
                                   int *max_prompt_out,
                                   int *max_case_out)
 {
-    int ctx = EVAL_MAX_CONTEXT;
-    int max_prompt = 0;
     int max_case = -1;
-    const int min_ctx = cfg->think_mode == DS4_THINK_MAX ?
-                        (int)ds4_think_max_min_context() : 1;
-
-    /* Think Max downgrades to normal thinking under its minimum context.  Size
-     * the prompts iteratively so the prompt tokenizer sees the same effective
-     * thinking mode that the actual run will use. */
-    for (int iter = 0; iter < 3; iter++) {
-        max_prompt = eval_max_prompt_tokens(engine, cfg, cases, ncases, ctx, &max_case);
-        long long required = (long long)max_prompt + (long long)cfg->max_tokens;
-        if (required < min_ctx) required = min_ctx;
-        if (required > EVAL_MAX_CONTEXT) {
-            fprintf(stderr,
-                    "ds4-eval: largest prompt (%d tokens, case %d) + --tokens (%d) exceeds the %d token context cap\n",
-                    max_prompt, max_case + 1, cfg->max_tokens, EVAL_MAX_CONTEXT);
-            exit(2);
-        }
-        if ((int)required == ctx) break;
-        ctx = (int)required;
+    int max_prompt = eval_max_prompt_tokens(engine, cfg, cases, ncases, &max_case);
+    long long required = (long long)max_prompt + (long long)cfg->max_tokens;
+    if (required < 1) required = 1;
+    if (required > EVAL_MAX_CONTEXT) {
+        fprintf(stderr,
+                "ds4-eval: largest prompt (%d tokens, case %d) + --tokens (%d) exceeds the %d token context cap\n",
+                max_prompt, max_case + 1, cfg->max_tokens, EVAL_MAX_CONTEXT);
+        exit(2);
     }
 
     if (max_prompt_out) *max_prompt_out = max_prompt;
     if (max_case_out) *max_case_out = max_case;
-    return ctx;
-}
-
-static void eval_warn_think_max_downgraded(const eval_config *cfg) {
-    if (cfg->think_mode != DS4_THINK_MAX ||
-        ds4_think_mode_for_context(cfg->think_mode, cfg->ctx_size) == DS4_THINK_MAX) {
-        return;
-    }
-    fprintf(stderr,
-            "ds4-eval: warning: --think-max needs --ctx >= %u; ctx=%d uses normal thinking instead\n",
-            ds4_think_max_min_context(),
-            cfg->ctx_size);
+    return (int)required;
 }
 
 static void eval_warn_context_budget(const eval_config *cfg, int max_prompt_tokens, int max_prompt_case) {
@@ -4200,7 +4175,7 @@ int main(int argc, char **argv) {
                 cfg.ctx_size, max_prompt_tokens, max_prompt_case + 1, cfg.max_tokens);
     } else {
         max_prompt_tokens = eval_max_prompt_tokens(engine, &cfg, eval_cases, ncases,
-                                                   cfg.ctx_size, &max_prompt_case);
+                                                   &max_prompt_case);
         fprintf(stderr,
                 "ds4-eval: context set to %d tokens "
                 "(largest prompt=%d tokens, case=%d, generation budget=%d)\n",
@@ -4208,7 +4183,6 @@ int main(int argc, char **argv) {
         eval_warn_context_budget(&cfg, max_prompt_tokens, max_prompt_case);
     }
     fprintf(stderr, "ds4-eval: model shape %s\n", ds4_engine_model_name(engine));
-    eval_warn_think_max_downgraded(&cfg);
     trace_write_header(trace, &cfg, ds4_engine_model_name(engine), ncases, max_prompt_tokens);
     log_context_memory(cfg.backend,
                        cfg.ctx_size,

@@ -286,21 +286,6 @@ static ds4_think_mode cli_effective_think_mode(const cli_generation_options *gen
     return ds4_think_mode_for_context(gen->think_mode, gen->ctx_size);
 }
 
-static bool cli_think_max_downgraded(const cli_generation_options *gen) {
-    return gen->think_mode == DS4_THINK_MAX &&
-           cli_effective_think_mode(gen) != DS4_THINK_MAX;
-}
-
-static void cli_warn_think_max_downgraded(const cli_generation_options *gen, const char *name) {
-    if (!cli_think_max_downgraded(gen)) return;
-    ds4_log(stderr,
-        DS4_LOG_WARNING,
-        "ds4: warning: %s needs --ctx >= %u; ctx=%d uses normal thinking instead\n",
-        name,
-        ds4_think_max_min_context(),
-        gen->ctx_size);
-}
-
 static double cli_now_sec(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -1292,7 +1277,7 @@ static void print_repl_help(void) {
     puts("Commands:");
     puts("  /help          Show this help.");
     puts("  /think         Use normal thinking mode.");
-    puts("  /think-max     Use Think Max only when context is at least 393216 tokens.");
+    puts("  /think-max     Use maximum reasoning effort.");
     puts("  /nothink       Disable thinking mode.");
     puts("  /ctx N         Set context size for following prompts.");
     puts("  /power N       Set GPU duty cycle percentage, 1..100.");
@@ -1391,6 +1376,7 @@ static void tokens_remove(ds4_tokens *dst, int pos, int n) {
 
 static const char *repl_glm_reasoning_effort_text(ds4_think_mode mode) {
     switch (mode) {
+    case DS4_THINK_LOW:
     case DS4_THINK_HIGH: return "Reasoning Effort: High";
     case DS4_THINK_MAX:  return "Reasoning Effort: Max";
     case DS4_THINK_NONE: return NULL;
@@ -1404,8 +1390,8 @@ static void repl_chat_build_think_prefix(ds4_engine *engine,
     if (ds4_engine_is_glm_dsa(engine)) {
         const char *effort = repl_glm_reasoning_effort_text(mode);
         if (effort) ds4_chat_append_message(engine, prefix, "system", effort);
-    } else if (mode == DS4_THINK_MAX) {
-        ds4_chat_append_max_effort_prefix(engine, prefix);
+    } else {
+        ds4_chat_append_think_effort_prefix(engine, prefix, mode);
     }
 }
 
@@ -1766,12 +1752,8 @@ static int run_repl(ds4_engine *engine, cli_config *cfg) {
             puts("Thinking mode: high.");
         } else if (!strcmp(cmd, "/think-max")) {
             cfg->gen.think_mode = DS4_THINK_MAX;
-            bool active = ds4_think_mode_for_context(cfg->gen.think_mode,
-                                                     chat.ctx_size) == DS4_THINK_MAX;
-            repl_chat_apply_think_prefix(engine, &chat,
-                                         active ? DS4_THINK_MAX : DS4_THINK_HIGH);
-            cli_warn_think_max_downgraded(&cfg->gen, "/think-max");
-            printf("Thinking mode: %s.\n", active ? "max" : "high (ctx below 393216)");
+            repl_chat_apply_think_prefix(engine, &chat, DS4_THINK_MAX);
+            puts("Thinking mode: max.");
         } else if (!strcmp(cmd, "/nothink")) {
             cfg->gen.think_mode = DS4_THINK_NONE;
             repl_chat_apply_think_prefix(engine, &chat, DS4_THINK_NONE);
@@ -1825,7 +1807,6 @@ static int run_repl(ds4_engine *engine, cli_config *cfg) {
                 ds4_think_mode effective = ds4_think_mode_for_context(cfg->gen.think_mode,
                                                                       chat.ctx_size);
                 repl_chat_apply_think_prefix(engine, &chat, effective);
-                cli_warn_think_max_downgraded(&cfg->gen, "/ctx");
             }
         } else if (!strcmp(cmd, "/quit") || !strcmp(cmd, "/exit")) {
             linenoiseFree(line);
@@ -2399,7 +2380,6 @@ int main(int argc, char **argv) {
                            cfg.gen.ctx_size,
                            ds4_engine_prefill_chunk(engine),
                            cfg.engine.ssd_streaming);
-        cli_warn_think_max_downgraded(&cfg.gen, "--think-max");
     }
     int rc = 0;
     if (cfg.inspect) {

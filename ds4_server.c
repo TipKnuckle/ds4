@@ -996,23 +996,21 @@ static void request_free(request *r) {
 
 static ds4_think_mode think_mode_from_enabled(bool enabled, ds4_think_mode effort) {
     if (!enabled || effort == DS4_THINK_NONE) return DS4_THINK_NONE;
-    return effort == DS4_THINK_MAX ? DS4_THINK_MAX : DS4_THINK_HIGH;
+    return effort;
 }
 
 static bool parse_reasoning_effort_name(const char *s, ds4_think_mode *out) {
     if (!s) return false;
-    if (!strcmp(s, "max")) {
+    if (!strcmp(s, "max") || !strcmp(s, "xhigh")) {
         *out = DS4_THINK_MAX;
         return true;
     }
-    if (!strcmp(s, "xhigh") || !strcmp(s, "high") ||
-        !strcmp(s, "medium") || !strcmp(s, "low") ||
-        !strcmp(s, "minimal"))
-    {
-        /* DS4 only exposes HIGH and MAX above zero, so "minimal" collapses to
-         * the smallest non-zero level (HIGH). Callers that need *no* reasoning
-         * must use "none" instead. */
+    if (!strcmp(s, "high") || !strcmp(s, "medium")) {
         *out = DS4_THINK_HIGH;
+        return true;
+    }
+    if (!strcmp(s, "low") || !strcmp(s, "minimal")) {
+        *out = DS4_THINK_LOW;
         return true;
     }
     if (!strcmp(s, "none")) {
@@ -2915,6 +2913,7 @@ static char *render_deepseek_chat_prompt_text(const chat_msgs *msgs, const char 
 
     buf out = {0};
     buf_puts(&out, "<｜begin▁of▁sentence｜>");
+    if (think_mode == DS4_THINK_HIGH) buf_puts(&out, ds4_think_high_prefix());
     if (think_mode == DS4_THINK_MAX) buf_puts(&out, ds4_think_max_prefix());
     buf_puts(&out, system.ptr ? system.ptr : "");
 
@@ -4829,8 +4828,8 @@ static bool parse_responses_request(ds4_engine *e, server *s, const char *body, 
              * default behaviour (and the model_alias_* fallbacks below) intact. */
             if (effort_seen) {
                 got_thinking = true;
-                /* Responses-API effort of "minimal" / "none" maps to disabled
-                 * thinking. Other effort values choose between HIGH and MAX. */
+                /* Responses-API effort "none" disables thinking. Other effort
+                 * values select the corresponding LOW, HIGH, or MAX mode. */
                 if (reasoning_effort == DS4_THINK_NONE) thinking_enabled = false;
             }
         } else if (!strcmp(key, "previous_response_id") ||
@@ -10993,10 +10992,13 @@ static char *rendered_chat_system_region(const char *prompt_text) {
     const char *bos = "<｜begin▁of▁sentence｜>";
     const size_t bos_len = strlen(bos);
     if (!strncmp(p, bos, bos_len)) p += bos_len;
-    const char *max_prefix = ds4_think_max_prefix();
-    const size_t max_prefix_len = strlen(max_prefix);
-    if (max_prefix_len && !strncmp(p, max_prefix, max_prefix_len)) {
-        p += max_prefix_len;
+    const char *prefixes[] = {ds4_think_max_prefix(), ds4_think_high_prefix()};
+    for (size_t i = 0; i < sizeof(prefixes) / sizeof(prefixes[0]); i++) {
+        const size_t prefix_len = strlen(prefixes[i]);
+        if (prefix_len && !strncmp(p, prefixes[i], prefix_len)) {
+            p += prefix_len;
+            break;
+        }
     }
     while (*p && isspace((unsigned char)*p)) p++;
 
@@ -15882,15 +15884,15 @@ static void test_chat_ignore_eos_contract(void) {
 
 static void test_reasoning_effort_mapping(void) {
     ds4_think_mode mode = DS4_THINK_NONE;
-    TEST_ASSERT(parse_reasoning_effort_name("low", &mode) && mode == DS4_THINK_HIGH);
+    TEST_ASSERT(parse_reasoning_effort_name("low", &mode) && mode == DS4_THINK_LOW);
     TEST_ASSERT(parse_reasoning_effort_name("medium", &mode) && mode == DS4_THINK_HIGH);
     TEST_ASSERT(parse_reasoning_effort_name("high", &mode) && mode == DS4_THINK_HIGH);
-    TEST_ASSERT(parse_reasoning_effort_name("xhigh", &mode) && mode == DS4_THINK_HIGH);
+    TEST_ASSERT(parse_reasoning_effort_name("xhigh", &mode) && mode == DS4_THINK_MAX);
     TEST_ASSERT(parse_reasoning_effort_name("max", &mode) && mode == DS4_THINK_MAX);
     TEST_ASSERT(!parse_reasoning_effort_name("banana", &mode));
-    TEST_ASSERT(ds4_think_mode_for_context(DS4_THINK_MAX, 32768) == DS4_THINK_HIGH);
-    TEST_ASSERT(ds4_think_mode_for_context(DS4_THINK_MAX,
-                                           (int)ds4_think_max_min_context()) == DS4_THINK_MAX);
+    TEST_ASSERT(ds4_think_mode_for_context(DS4_THINK_MAX, 32768) == DS4_THINK_MAX);
+    TEST_ASSERT(strlen(ds4_think_high_prefix()) == 476);
+    TEST_ASSERT(strlen(ds4_think_max_prefix()) == 528);
 }
 
 static void test_model_alias_thinking_controls(void) {
@@ -15930,10 +15932,10 @@ static void test_api_thinking_controls_parse(void) {
     const char *openai_effort = "\"xhigh\"";
     mode = DS4_THINK_HIGH;
     TEST_ASSERT(parse_reasoning_effort_value(&openai_effort, &mode));
-    TEST_ASSERT(mode == DS4_THINK_HIGH);
+    TEST_ASSERT(mode == DS4_THINK_MAX);
 }
 
-static void test_render_think_max_prompt_prefix(void) {
+static void test_render_thinking_effort_prefixes(void) {
     chat_msgs msgs = {0};
     chat_msg sys = {0};
     sys.role = xstrdup("system");
@@ -15950,6 +15952,18 @@ static void test_render_think_max_prompt_prefix(void) {
     TEST_ASSERT(strstr(prompt, ds4_think_max_prefix()) != NULL);
     TEST_ASSERT(strstr(prompt, "You are terse.<｜User｜>Hello<｜Assistant｜><think>") != NULL);
     TEST_ASSERT(strstr(prompt, "</think>") == NULL);
+    free(prompt);
+
+    prompt = render_chat_prompt_text(&msgs, NULL, NULL, DS4_THINK_HIGH);
+    TEST_ASSERT(strstr(prompt, ds4_think_high_prefix()) != NULL);
+    TEST_ASSERT(strstr(prompt, ds4_think_max_prefix()) == NULL);
+    TEST_ASSERT(strstr(prompt, "<｜Assistant｜><think>") != NULL);
+    free(prompt);
+
+    prompt = render_chat_prompt_text(&msgs, NULL, NULL, DS4_THINK_LOW);
+    TEST_ASSERT(strstr(prompt, ds4_think_high_prefix()) == NULL);
+    TEST_ASSERT(strstr(prompt, ds4_think_max_prefix()) == NULL);
+    TEST_ASSERT(strstr(prompt, "<｜Assistant｜><think>") != NULL);
 
     free(prompt);
     chat_msgs_free(&msgs);
@@ -19412,7 +19426,7 @@ static void ds4_server_unit_tests_run(void) {
     test_reasoning_effort_mapping();
     test_model_alias_thinking_controls();
     test_api_thinking_controls_parse();
-    test_render_think_max_prompt_prefix();
+    test_render_thinking_effort_prefixes();
     test_render_non_thinking_prompt_closes_think();
     test_render_drops_old_reasoning_without_tools();
     test_render_preserves_reasoning_with_tools();
