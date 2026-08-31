@@ -1568,6 +1568,11 @@ or `low` uses plain thinking without an effort prefix, `medium` or `high` adds
 the high-effort prefix, and `xhigh` or `max` adds the maximum-effort prefix.
 These modes do not change based on the configured context size.
 
+GLM 5.3 Flash maps the same API levels onto its native effort strings:
+`minimal` or `low` selects `Reasoning Effort: Low`, `medium` or `high`
+selects `Reasoning Effort: High`, and `xhigh` or `max` selects
+`Reasoning Effort: Max`.
+
 For direct replies, use `thinking: {"type":"disabled"}`, `think:false`, or a
 non-thinking model alias such as `deepseek-chat`.
 

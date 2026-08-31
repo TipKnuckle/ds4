@@ -7204,6 +7204,8 @@ static void test_agent_glm_template_policy(void) {
         AGENT_TOOL_SYNTAX_GLM));
     AGENT_TEST_ASSERT(agent_tool_syntax_assistant_turn_uses_eos(
         AGENT_TOOL_SYNTAX_DSML));
+    AGENT_TEST_ASSERT(!strcmp(ds4_glm_reasoning_effort_text(DS4_THINK_LOW),
+                              "Reasoning Effort: Low"));
     AGENT_TEST_ASSERT(!strcmp(ds4_glm_reasoning_effort_text(DS4_THINK_HIGH),
                               "Reasoning Effort: High"));
     AGENT_TEST_ASSERT(!strcmp(ds4_glm_reasoning_effort_text(DS4_THINK_MAX),
