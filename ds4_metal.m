@@ -21251,6 +21251,7 @@ int ds4_gpu_matmul_f16_pair_compressor_store_tensor(
     if (!g_initialized && !ds4_gpu_init()) return -1;
     if ((g_quality_mode ||
          (!ds4_gpu_device_name_contains("M3") &&
+          !ds4_gpu_device_name_contains("M4") &&
           !ds4_gpu_device_name_contains("M5"))) ||
         getenv("DS4_METAL_DISABLE_COMPRESSOR_PAIR_PROJ") != NULL ||
         getenv("DS4_METAL_DISABLE_COMPRESSOR_STORE_ONE") != NULL) {
@@ -27434,6 +27435,7 @@ static int ds4_gpu_encode_flash_kv_stage_f16(
         getenv("DS4_METAL_DISABLE_GATHERED_KV_STAGE") == NULL &&
         g_flash_kv_stage_f16_pipeline != nil &&
         (ds4_gpu_device_name_contains("M3") ||
+         ds4_gpu_device_name_contains("M4") ||
          ds4_gpu_device_name_contains("M5"));
     const bool component_disabled = eligible &&
         (ds4_gpu_env_bool("DS4_METAL_DISABLE_CONTIG_F32_F16_COPY") > 0 ||
