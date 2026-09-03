@@ -493,8 +493,8 @@ static void build_chat_prompt(ds4_engine *engine,
     if (ds4_engine_is_glm_dsa(engine)) {
         const char *effort = ds4_glm_reasoning_effort_text(think_mode);
         if (effort) ds4_chat_append_message(engine, out, "system", effort);
-    } else if (think_mode == DS4_THINK_MAX) {
-        ds4_chat_append_max_effort_prefix(engine, out);
+    } else {
+        ds4_chat_append_think_effort_prefix(engine, out, think_mode);
     }
     if (gen->system && gen->system[0])
         ds4_chat_append_message(engine, out, "system", gen->system);
