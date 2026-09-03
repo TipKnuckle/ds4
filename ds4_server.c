@@ -2832,17 +2832,15 @@ static void append_dsml_tool_calls_text(buf *b, const tool_calls *calls) {
 static void append_glm_tool_calls_text(buf *b, const tool_calls *calls,
                                        const tool_schema_orders *tool_orders) {
     if (!calls || calls->len == 0) return;
-    /* GLM emits each tool block on its own line.  Preserve a separator already
-     * retained in the content or raw block; otherwise restore one newline. */
-    const char *raw = calls->raw_tool_text;
-    if ((!b->len || b->ptr[b->len - 1] != '\n') &&
-        (!raw || !raw[0] || raw[0] != '\n')) {
-        buf_putc(b, '\n');
-    }
+    /* Sampled replay includes the exact content-to-tool boundary.  Do not
+     * synthesize whitespace here: GLM emits zero, one, or two newlines before
+     * <tool_call>, and changing that boundary can retokenize the last visible
+     * content token even when every following tool token is identical. */
     if (calls->raw_tool_text && calls->raw_tool_text[0]) {
         buf_puts(b, calls->raw_tool_text);
         return;
     }
+    if (!b->len || b->ptr[b->len - 1] != '\n') buf_putc(b, '\n');
     for (int i = 0; i < calls->len; i++) {
         const tool_call *tc = &calls->v[i];
         const tool_schema_order *order =
@@ -5732,9 +5730,13 @@ static bool parse_glm_generated_message_ex(const char *text,
         return true;
     }
 
+    /* Keep the sampled boundary with the raw block.  The parsed content is
+     * exposed separately to the client, but exact replay must retain arbitrary
+     * whitespace here (including the absence of a separator). */
     const char *raw_block_start = start;
-    if (start >= text + 2 && start[-2] == '\n' && start[-1] == '\n') {
-        raw_block_start = start - 2;
+    while (raw_block_start > text &&
+           isspace((unsigned char)raw_block_start[-1])) {
+        raw_block_start--;
     }
     size_t content_len = trim_tool_separator_ws(text, 0,
                                                 (size_t)(raw_block_start - text));
@@ -16202,14 +16204,10 @@ static void test_render_glm_preserves_reasoning_with_tools(void) {
     chat_msgs_free(&msgs);
 }
 
-static void test_glm_raw_tool_call_keeps_sampled_line_separator(void) {
-    /* Regression: the sampled thinking+tool turn renders the exact raw tool
-     * block on its own line, i.e. one newline between the visible assistant
-     * text and the first block.  The replay trims the assistant content and
-     * carries the exact raw block back through the remembered tool id, so
-     * the renderer must restore exactly that separator.  Without it the
-     * replayed prompt diverges from the sampled bytes at one token and every
-     * thinking+tool turn drops the whole live KV prefix. */
+static void test_glm_raw_tool_call_keeps_sampled_boundary(void) {
+    /* Pi replays assistant content and structured tool calls separately.  The
+     * remembered raw block must therefore carry the sampled boundary exactly:
+     * GLM may enter <tool_call> without first emitting a newline. */
     chat_msgs msgs = {0};
     chat_msg user = {0};
     user.role = xstrdup("user");
@@ -16233,13 +16231,11 @@ static void test_glm_raw_tool_call_keeps_sampled_line_separator(void) {
     char *prompt = render_chat_prompt_text_for_syntax(
         SERVER_MODEL_SYNTAX_GLM, &msgs, NULL, &orders, DS4_THINK_HIGH);
     TEST_ASSERT(prompt != NULL);
-    /* Trimmed replay content + raw block: exactly one separator newline. */
-    TEST_ASSERT(strstr(prompt, "Visible text:\n<|tool" "_call|bash") != NULL);
-    TEST_ASSERT(strstr(prompt, "Visible text:\n\n<|tool" "_call|") == NULL);
+    TEST_ASSERT(strstr(prompt, "Visible text:<|tool" "_call|bash") != NULL);
     free(prompt);
 
-    /* The canonical tool checkpoint keeps the parsed trailing newline in the
-     * content; it must not gain a second separator. */
+    /* An exact raw block must not gain another separator when content already
+     * carries one. */
     request r;
     request_init(&r, REQ_CHAT, 128);
     r.model_syntax = SERVER_MODEL_SYNTAX_GLM;
@@ -16252,16 +16248,40 @@ static void test_glm_raw_tool_call_keeps_sampled_line_separator(void) {
     free(suffix);
     request_free(&r);
 
-    /* A tool-only replay starts from an empty assistant-content buffer and
-     * still needs the protocol separator before the exact raw block. */
+    /* Tool-only sampled replay is exact too; no canonical separator is added. */
     request_init(&r, REQ_CHAT, 128);
     r.model_syntax = SERVER_MODEL_SYNTAX_GLM;
     r.think_mode = DS4_THINK_NONE;
     suffix = build_tool_checkpoint_suffix(&r, "", NULL, &asst.calls);
-    TEST_ASSERT(suffix != NULL && suffix[0] == '\n');
-    TEST_ASSERT(!strcmp(suffix + 1, asst.calls.raw_tool_text));
+    TEST_ASSERT(suffix != NULL);
+    TEST_ASSERT(!strcmp(suffix, asst.calls.raw_tool_text));
     free(suffix);
     request_free(&r);
+
+    /* Parser-to-renderer regression for the observed Pi/GLM form. */
+    const char *generated =
+        "thinking</think>Visible text.<tool_call>bash"
+        "<arg_key>command</arg_key><arg_value>pwd</arg_value>"
+        "</tool_call>";
+    char *content = NULL;
+    char *reasoning = NULL;
+    tool_calls parsed = {0};
+    TEST_ASSERT(parse_generated_message_ex_for_syntax(
+        SERVER_MODEL_SYNTAX_GLM, generated, false,
+        &content, &reasoning, &parsed));
+    TEST_ASSERT(content && !strcmp(content, "Visible text."));
+    TEST_ASSERT(reasoning && !strcmp(reasoning, "thinking"));
+    TEST_ASSERT(parsed.raw_tool_text && parsed.raw_tool_text[0] == '<');
+    request_init(&r, REQ_CHAT, 128);
+    r.model_syntax = SERVER_MODEL_SYNTAX_GLM;
+    r.think_mode = DS4_THINK_HIGH;
+    suffix = build_tool_checkpoint_suffix(&r, content, reasoning, &parsed);
+    TEST_ASSERT(suffix && !strcmp(suffix, generated));
+    free(suffix);
+    request_free(&r);
+    free(content);
+    free(reasoning);
+    tool_calls_free(&parsed);
 
     tool_schema_orders_free(&orders);
     chat_msgs_free(&msgs);
@@ -19618,7 +19638,7 @@ static void ds4_server_unit_tests_run(void) {
     test_render_glm_chat_prompt_text();
     test_render_glm_drops_old_reasoning_without_tools();
     test_render_glm_preserves_reasoning_with_tools();
-    test_glm_raw_tool_call_keeps_sampled_line_separator();
+    test_glm_raw_tool_call_keeps_sampled_boundary();
     test_render_glm_groups_tool_results();
     test_tool_schema_order_from_anthropic_schema();
     test_tool_schema_order_from_openai_tools();
