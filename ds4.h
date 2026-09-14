@@ -26,7 +26,7 @@ typedef enum {
     DS4_THINK_NONE,
     DS4_THINK_HIGH,
     DS4_THINK_MAX,
-    DS4_THINK_LOW,      /* Qwen3.8 reasoning_effort low/medium; other models render them as HIGH */
+    DS4_THINK_LOW,      /* Named effort levels use each model's own prompt template. */
     DS4_THINK_MEDIUM,
 } ds4_think_mode;
 /* Explicit numeric effort lives outside the stable named-mode values. */
@@ -316,6 +316,8 @@ int ds4_think_mode_level(ds4_think_mode mode);
 bool ds4_think_mode_parse_level(const char *text, ds4_think_mode *out);
 const char *ds4_think_mode_name(ds4_think_mode mode);
 const char *ds4_think_max_prefix(void);
+/* DeepSeek V4 checkpoint template; returns an empty string for no prefix. */
+const char *ds4_deepseek4_reasoning_effort_text(ds4_think_mode mode);
 const char *ds4_glm_reasoning_effort_text(ds4_think_mode mode);
 ds4_think_mode ds4_think_mode_for_context(ds4_think_mode mode, int ctx_size);
 /* Uses the active model shape selected by ds4_engine_open(); call after opening
