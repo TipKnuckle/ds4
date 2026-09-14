@@ -44,10 +44,33 @@ sampling and output-budget fields are supported; explicit request parameters
 take precedence over defaults.
 
 The default sampling settings are temperature 1, top-p 1, and min-p 0.05.
-For DeepSeek, thinking is on by default. `reasoning_effort=max` selects Think
-Max at any context size; context and output limits still bound generation.
-`xhigh` maps to normal thinking, not Think Max. Use `think:false`, a disabled
-thinking object, or a non-thinking model alias for direct answers.
+For DeepSeek V4 Flash, thinking is on at `high` effort by default. Plain Flash
+uses the official [Flash-0731 encoder](https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731/blob/main/encoding/encoding_dsv4.py):
+
+| API effort | Flash-0731 prompt |
+| --- | --- |
+| `minimal`, `low` | Thinking with no effort prefix |
+| `medium`, `high`, `xhigh` | Official high-effort prefix |
+| `max` | Official maximum-effort prefix |
+| `none` | Thinking disabled |
+
+The same prefixes are used by the CLI and agent: `--think` selects high and
+`--think-max` selects max. Effort never downgrades because of context size.
+Context and output limits still bound generation. The
+[0731 model card](https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731#how-to-run-locally)
+recommends allowing up to 384K output tokens for high/max; this is guidance,
+not a minimum context requirement.
+
+Older Flash GGUFs do not reliably identify their release in metadata. When
+deliberately loading preview weights, launch with `DS4_DEEPSEEK4_REASONING=preview`
+to retain the preview mapping (only max adds the older effort prefix). Pro and
+Vision Experimental retain that mapping by default. `DS4_DEEPSEEK4_REASONING=0731`
+explicitly selects the released mapping. Set this
+environment variable before starting the process; it does not affect GLM,
+Qwen, or DeepSeek V4.1's separate prompt templates.
+
+Use `think:false`, a disabled thinking object, or a non-thinking model alias
+for direct answers.
 
 ## Multiple sessions
 

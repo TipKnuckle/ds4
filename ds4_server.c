@@ -3114,7 +3114,7 @@ static char *render_deepseek_chat_prompt_text(const chat_msgs *msgs, const char 
 
     buf out = {0};
     buf_puts(&out, "<｜begin▁of▁sentence｜>");
-    if (think_mode == DS4_THINK_MAX) buf_puts(&out, ds4_think_max_prefix());
+    buf_puts(&out, ds4_deepseek4_reasoning_effort_text(think_mode));
     buf_puts(&out, system.ptr ? system.ptr : "");
 
     bool pending_assistant = false;
@@ -12147,10 +12147,16 @@ static char *rendered_chat_system_region(const char *prompt_text) {
     const char *bos = "<｜begin▁of▁sentence｜>";
     const size_t bos_len = strlen(bos);
     if (!strncmp(p, bos, bos_len)) p += bos_len;
-    const char *max_prefix = ds4_think_max_prefix();
-    const size_t max_prefix_len = strlen(max_prefix);
-    if (max_prefix_len && !strncmp(p, max_prefix, max_prefix_len)) {
-        p += max_prefix_len;
+    const char *prefixes[] = {
+        ds4_deepseek4_reasoning_effort_text(DS4_THINK_MAX),
+        ds4_deepseek4_reasoning_effort_text(DS4_THINK_HIGH),
+    };
+    for (size_t i = 0; i < sizeof(prefixes) / sizeof(prefixes[0]); i++) {
+        const size_t len = strlen(prefixes[i]);
+        if (len && !strncmp(p, prefixes[i], len)) {
+            p += len;
+            break;
+        }
     }
     while (*p && isspace((unsigned char)*p)) p++;
 
@@ -17384,6 +17390,53 @@ static void test_render_think_max_prompt_prefix(void) {
     chat_msgs_free(&msgs);
 }
 
+static void test_deepseek4_official_reasoning_prefixes(void) {
+    /* Hashes from the official Flash-0731 REASONING_EFFORT_PROMPTS, not from
+     * the implementation under test. Also pin the complete rendered envelope. */
+    const char *env = "DS4_DEEPSEEK4_REASONING";
+    char *saved = getenv(env) ? xstrdup(getenv(env)) : NULL;
+    const char *formats[] = {"0731", "preview"};
+    const char *aliases[] = {"none", "minimal", "low", "medium", "high", "xhigh", "max"};
+    for (size_t f = 0; f < sizeof(formats) / sizeof(formats[0]); f++) {
+        TEST_ASSERT(setenv(env, formats[f], 1) == 0);
+        for (size_t i = 0; i < sizeof(aliases) / sizeof(aliases[0]); i++) {
+            ds4_think_mode mode = DS4_THINK_NONE;
+            TEST_ASSERT(parse_reasoning_effort_name(aliases[i], &mode));
+            const char *prefix = ds4_deepseek4_reasoning_effort_text(mode);
+            const bool high = f == 0 ? (i >= 3 && i <= 5) : i == 6;
+            const bool max = f == 0 && i == 6;
+            const char *sha = max ? "e044688857029721c1653fc25a2f414b8b1030db" :
+                high ? "bed6f7c6d90743ed442f3da80117db88a8fc16a6" :
+                       "da39a3ee5e6b4b0d3255bfef95601890afd80709";
+            char actual_sha[41];
+            ds4_kvstore_sha1_bytes_hex(prefix, strlen(prefix), actual_sha);
+            TEST_ASSERT(!strcmp(actual_sha, sha));
+            TEST_ASSERT(strlen(prefix) == (max ? 528u : high ? 476u : 0u));
+            chat_msgs msgs = {0};
+            chat_msg sys = {.role = xstrdup("system"), .content = xstrdup("System text.")};
+            chat_msg user = {.role = xstrdup("user"), .content = xstrdup("Hello")};
+            chat_msgs_push(&msgs, sys);
+            chat_msgs_push(&msgs, user);
+            char *prompt = render_chat_prompt_text_for_syntax(
+                SERVER_MODEL_SYNTAX_DEEPSEEK, &msgs, NULL, NULL, mode);
+            buf expected = {0};
+            buf_puts(&expected, "<｜begin▁of▁sentence｜>");
+            buf_puts(&expected, prefix);
+            buf_puts(&expected, "System text.<｜User｜>Hello<｜Assistant｜>");
+            buf_puts(&expected, mode == DS4_THINK_NONE ? "</think>" : "<think>");
+            TEST_ASSERT(prompt && !strcmp(prompt, expected.ptr));
+            char *system = rendered_chat_system_region(prompt);
+            TEST_ASSERT(!strcmp(system, "System text."));
+            free(system);
+            free(prompt);
+            buf_free(&expected);
+            chat_msgs_free(&msgs);
+        }
+    }
+    if (saved) { setenv(env, saved, 1); free(saved); }
+    else unsetenv(env);
+}
+
 static void test_render_non_thinking_prompt_closes_think(void) {
     chat_msgs msgs = {0};
     chat_msg user = {0};
@@ -22055,6 +22108,7 @@ static void ds4_server_unit_tests_run(void) {
     test_model_alias_thinking_controls();
     test_api_thinking_controls_parse();
     test_render_think_max_prompt_prefix();
+    test_deepseek4_official_reasoning_prefixes();
     test_render_non_thinking_prompt_closes_think();
     test_render_drops_old_reasoning_without_tools();
     test_render_preserves_reasoning_with_tools();

@@ -413,10 +413,17 @@ int         g_gpu_peer_ok[DS4_MAX_GPUS][DS4_MAX_GPUS];
 #define DS4_DEFAULT_COMPRESS_ROPE_FREQ_BASE (160000.0f)
 #define DS4_DEFAULT_ROPE_ORIG_CTX       UINT64_C(65536)
 
-static const char DS4_REASONING_EFFORT_MAX_PREFIX[] =
+/* Official Flash-0731 encoding/encoding_dsv4.py REASONING_EFFORT_PROMPTS.
+ * The preview checkpoint used the same HIGH text for its MAX mode. */
+static const char DS4_REASONING_EFFORT_HIGH_PREFIX[] =
     "Reasoning Effort: Absolute maximum with no shortcuts permitted.\n"
     "You MUST be very thorough in your thinking and comprehensively decompose the problem to resolve the root cause, rigorously stress-testing your logic against all potential paths, edge cases, and adversarial scenarios.\n"
     "Explicitly write out your entire deliberation process, documenting every intermediate step, considered alternative, and rejected hypothesis to ensure absolutely no assumption is left unchecked.\n\n";
+
+static const char DS4_REASONING_EFFORT_MAX_PREFIX[] =
+    "Reasoning Effort: Beyond maximum — exhaustive, relentless, and uncompromising.\n"
+    "You MUST reason with the utmost depth and rigor, leaving absolutely nothing to chance: exhaustively decompose the problem into its most fundamental components, trace every causal chain to its root, and resolve the underlying cause rather than any surface symptom.\n"
+    "Do not stop reasoning until you have independently verified the solution from multiple angles and are certain that no assumption remains unchecked and no error remains undiscovered.\n\n";
 
 static bool ds4_backend_uses_graph(ds4_backend backend) {
     return backend == DS4_BACKEND_METAL || backend == DS4_BACKEND_CUDA;
@@ -43376,8 +43383,8 @@ static void vocab_free(ds4_vocab *vocab) {
 }
 
 /* Build the DS4 chat prompt: BOS, optional system text, user prompt, assistant
- * marker, and either <think> or </think> depending on the requested mode.  Max
- * thinking is only a prompt prefix: the model still enters through <think>. */
+ * marker, and either <think> or </think> depending on the requested mode.
+ * Effort instructions are prompt prefixes; enabled modes enter through <think>. */
 static void chat_push_bos_sequence(const ds4_vocab *vocab, token_vec *out) {
     if (vocab->bos_id < 0) return;
     token_vec_push(out, vocab->bos_id);
@@ -43406,6 +43413,26 @@ const char *ds4_deepseek41_reasoning_effort_text(ds4_think_mode mode) {
     return text;
 }
 
+const char *ds4_deepseek4_reasoning_effort_text(ds4_think_mode mode) {
+    /* Released plain Flash defaults to 0731. Older GGUFs do not reliably
+     * distinguish preview from 0731, so allow an explicit template override
+     * rather than guessing from the model or calibration file name. */
+    bool released = g_ds4_shape.variant == DS4_VARIANT_FLASH && !g_ds4_flash_vision_exp;
+    const char *format = getenv("DS4_DEEPSEEK4_REASONING");
+    if (format && format[0]) {
+        if (!strcmp(format, "0731")) released = true;
+        else if (!strcmp(format, "preview")) released = false;
+        else ds4_die("DS4_DEEPSEEK4_REASONING must be 0731 or preview");
+    }
+    if (mode == DS4_THINK_MAX) {
+        return released ? DS4_REASONING_EFFORT_MAX_PREFIX : DS4_REASONING_EFFORT_HIGH_PREFIX;
+    }
+    if (released && (mode == DS4_THINK_HIGH || mode == DS4_THINK_MEDIUM)) {
+        return DS4_REASONING_EFFORT_HIGH_PREFIX;
+    }
+    return "";
+}
+
 static void chat_push_think_prefix(const ds4_vocab *vocab,
                                    ds4_think_mode   think_mode,
                                    token_vec       *out) {
@@ -43421,8 +43448,8 @@ static void chat_push_think_prefix(const ds4_vocab *vocab,
             token_vec_push(out, vocab->system_id);
             bpe_tokenize_text(vocab, effort, out);
         }
-    } else if (think_mode == DS4_THINK_MAX) {
-        bpe_tokenize_text(vocab, DS4_REASONING_EFFORT_MAX_PREFIX, out);
+    } else if (DS4_MODEL_FAMILY == DS4_MODEL_FAMILY_DEEPSEEK4) {
+        bpe_tokenize_text(vocab, ds4_deepseek4_reasoning_effort_text(think_mode), out);
     }
 }
 
@@ -59749,7 +59776,7 @@ const char *ds4_think_mode_name(ds4_think_mode mode) {
 }
 
 const char *ds4_think_max_prefix(void) {
-    return DS4_REASONING_EFFORT_MAX_PREFIX;
+    return ds4_deepseek4_reasoning_effort_text(DS4_THINK_MAX);
 }
 
 ds4_think_mode ds4_think_mode_for_context(ds4_think_mode mode, int ctx_size) {
