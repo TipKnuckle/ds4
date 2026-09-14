@@ -213,7 +213,7 @@ static void print_sampling(FILE *fp, const help_colors *c, bool full, ds4_help_t
     opt(fp, c, "--seed N", "Sampling seed for reproducible non-greedy runs.");
     para(fp, c, "GLM CLI and agent runs default to temperature 1.0, top-p 0.95, and min-p 0 unless those options are set explicitly.");
     opt(fp, c, "--think", "Use normal thinking mode (V4.1: effort 75).");
-    opt(fp, c, "--think-max", "Use maximum thinking (V4.1: 100; V4: requires ctx >= 393216).");
+    opt(fp, c, "--think-max", "Use maximum thinking (V4.1: effort 100).");
     if (tool == DS4_HELP_DS4 || tool == DS4_HELP_AGENT)
         opt(fp, c, "--think-level N", "V4.1 thinking effort, 1..100; 0 disables thinking.");
     opt(fp, c, "--nothink", "Disable thinking and ask for direct replies.");
@@ -359,7 +359,7 @@ static void print_server_thinking(FILE *fp, const help_colors *c) {
     title(fp, c, "Server Thinking Defaults");
     para(fp, c, "DeepSeek-compatible chat requests default to high-effort thinking.");
     para(fp, c, "reasoning_effort=max or output_config.effort=max requests Think Max.");
-    para(fp, c, "Think Max requires --ctx >= 393216; smaller contexts use high.");
+    para(fp, c, "Requested thinking effort is independent of context size; context and output limits still bound generation.");
     para(fp, c, "thinking={type:disabled}, think=false, or model=deepseek-chat selects non-thinking mode.");
     para(fp, c, "In thinking mode, client sampling knobs are ignored like the official API.");
     fputc('\n', fp);

@@ -2640,40 +2640,22 @@ static int eval_auto_context_size(ds4_engine *engine,
     int ctx = EVAL_MAX_CONTEXT;
     int max_prompt = 0;
     int max_case = -1;
-    const int min_ctx = cfg->think_mode == DS4_THINK_MAX ?
-                        (int)ds4_think_max_min_context() : 1;
-
-    /* Think Max downgrades to normal thinking under its minimum context.  Size
-     * the prompts iteratively so the prompt tokenizer sees the same effective
-     * thinking mode that the actual run will use. */
-    for (int iter = 0; iter < 3; iter++) {
-        max_prompt = eval_max_prompt_tokens(engine, cfg, cases, ncases, ctx, &max_case);
-        long long required = (long long)max_prompt + (long long)max_generation_tokens;
-        if (required < min_ctx) required = min_ctx;
-        if (required > EVAL_MAX_CONTEXT) {
-            fprintf(stderr,
-                    "ds4-eval: largest prompt (%d tokens, case %d) + generation budget (%d) exceeds the %d token context cap\n",
-                    max_prompt, max_case + 1, max_generation_tokens, EVAL_MAX_CONTEXT);
-            exit(2);
-        }
-        if ((int)required == ctx) break;
-        ctx = (int)required;
+    /* Effort does not depend on context size, so one tokenization pass is
+     * enough to size the context for the prompt and requested output budget. */
+    max_prompt = eval_max_prompt_tokens(engine, cfg, cases, ncases, ctx, &max_case);
+    long long required = (long long)max_prompt + (long long)max_generation_tokens;
+    if (required < 1) required = 1;
+    if (required > EVAL_MAX_CONTEXT) {
+        fprintf(stderr,
+                "ds4-eval: largest prompt (%d tokens, case %d) + generation budget (%d) exceeds the %d token context cap\n",
+                max_prompt, max_case + 1, max_generation_tokens, EVAL_MAX_CONTEXT);
+        exit(2);
     }
+    ctx = (int)required;
 
     if (max_prompt_out) *max_prompt_out = max_prompt;
     if (max_case_out) *max_case_out = max_case;
     return ctx;
-}
-
-static void eval_warn_think_max_downgraded(const eval_config *cfg) {
-    if (cfg->think_mode != DS4_THINK_MAX ||
-        ds4_think_mode_for_context(cfg->think_mode, cfg->ctx_size) == DS4_THINK_MAX) {
-        return;
-    }
-    fprintf(stderr,
-            "ds4-eval: warning: --think-max needs --ctx >= %u; ctx=%d uses normal thinking instead\n",
-            ds4_think_max_min_context(),
-            cfg->ctx_size);
 }
 
 static void eval_warn_context_budget(const eval_config *cfg, int max_prompt_tokens,
@@ -4841,7 +4823,6 @@ int main(int argc, char **argv) {
                                  max_generation_tokens);
     }
     fprintf(stderr, "ds4-eval: model shape %s\n", ds4_engine_model_name(engine));
-    eval_warn_think_max_downgraded(&cfg);
     trace_write_header(trace, &cfg, ds4_engine_model_name(engine), ncases,
                        max_prompt_tokens, max_generation_tokens);
     log_context_memory(cfg.backend,

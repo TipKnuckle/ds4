@@ -45,7 +45,7 @@ take precedence over defaults.
 
 The default sampling settings are temperature 1, top-p 1, and min-p 0.05.
 For DeepSeek, thinking is on by default. `reasoning_effort=max` selects Think
-Max only with sufficient context; otherwise it falls back to normal thinking.
+Max at any context size; context and output limits still bound generation.
 `xhigh` maps to normal thinking, not Think Max. Use `think:false`, a disabled
 thinking object, or a non-thinking model alias for direct answers.
 
