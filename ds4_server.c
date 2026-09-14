@@ -17305,9 +17305,21 @@ static void test_reasoning_effort_mapping(void) {
     TEST_ASSERT(think_mode_from_enabled(false, DS4_THINK_LOW) == DS4_THINK_NONE);
     TEST_ASSERT(!strcmp(ds4_glm_reasoning_effort_text(DS4_THINK_LOW), "Reasoning Effort: High"));
     TEST_ASSERT(!strcmp(ds4_glm_reasoning_effort_text(DS4_THINK_MEDIUM), "Reasoning Effort: High"));
-    TEST_ASSERT(ds4_think_mode_for_context(DS4_THINK_MAX, 32768) == DS4_THINK_HIGH);
-    TEST_ASSERT(ds4_think_mode_for_context(DS4_THINK_MAX,
-                                           (int)ds4_think_max_min_context()) == DS4_THINK_MAX);
+    const int contexts[] = {256, 32768, 393215, 393216, 1048576};
+    const ds4_think_mode modes[] = {DS4_THINK_NONE, DS4_THINK_LOW,
+        DS4_THINK_MEDIUM, DS4_THINK_HIGH, DS4_THINK_MAX,
+        (ds4_think_mode)DS4_THINK_LEVEL_BASE,
+        (ds4_think_mode)(DS4_THINK_LEVEL_BASE + 75)};
+    for (size_t i = 0; i < sizeof(contexts) / sizeof(contexts[0]); i++) {
+        for (size_t j = 0; j < sizeof(modes) / sizeof(modes[0]); j++) {
+            TEST_ASSERT(ds4_think_mode_for_context(modes[j], contexts[i]) == modes[j]);
+        }
+        chat_msgs msgs = {0};
+        char *prompt = render_chat_prompt_text(&msgs, NULL, NULL,
+            ds4_think_mode_for_context(DS4_THINK_MAX, contexts[i]));
+        TEST_ASSERT(prompt && strstr(prompt, ds4_think_max_prefix()));
+        free(prompt);
+    }
 }
 
 static void test_model_alias_thinking_controls(void) {

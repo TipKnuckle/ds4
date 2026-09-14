@@ -418,11 +418,6 @@ static const char DS4_REASONING_EFFORT_MAX_PREFIX[] =
     "You MUST be very thorough in your thinking and comprehensively decompose the problem to resolve the root cause, rigorously stress-testing your logic against all potential paths, edge cases, and adversarial scenarios.\n"
     "Explicitly write out your entire deliberation process, documenting every intermediate step, considered alternative, and rejected hypothesis to ensure absolutely no assumption is left unchecked.\n\n";
 
-/* DeepSeek recommends Think Max only with at least a 384K-token context window.
- * Below that size we keep ordinary thinking to avoid injecting a prompt that
- * asks for a reasoning budget the allocated context is not meant to hold. */
-#define DS4_THINK_MAX_MIN_CONTEXT 393216u
-
 static bool ds4_backend_uses_graph(ds4_backend backend) {
     return backend == DS4_BACKEND_METAL || backend == DS4_BACKEND_CUDA;
 }
@@ -59757,15 +59752,10 @@ const char *ds4_think_max_prefix(void) {
     return DS4_REASONING_EFFORT_MAX_PREFIX;
 }
 
-uint32_t ds4_think_max_min_context(void) {
-    return DS4_THINK_MAX_MIN_CONTEXT;
-}
-
 ds4_think_mode ds4_think_mode_for_context(ds4_think_mode mode, int ctx_size) {
-    if (DS4_MODEL_FAMILY != DS4_MODEL_FAMILY_DEEPSEEK41 &&
-        mode == DS4_THINK_MAX && (uint32_t)(ctx_size > 0 ? ctx_size : 0) < DS4_THINK_MAX_MIN_CONTEXT) {
-        return DS4_THINK_HIGH;
-    }
+    /* Model-card context/output-budget recommendations do not change the
+     * requested effort. Normal context and generation limits still apply. */
+    (void)ctx_size;
     return mode;
 }
 
