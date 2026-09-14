@@ -2976,11 +2976,13 @@ static void append_dsml_tool_calls_text(buf *b, const tool_calls *calls, bool v4
 static void append_glm_tool_calls_text(buf *b, const tool_calls *calls,
                                        const tool_schema_orders *tool_orders) {
     if (!calls || calls->len == 0) return;
+    /* Raw replay carries the sampled content-to-tool separator, including
+     * its absence. Adding whitespace would change the replayed token prefix. */
     if (calls->raw_tool_text && calls->raw_tool_text[0]) {
         buf_puts(b, calls->raw_tool_text);
         return;
     }
-    buf_putc(b, '\n');
+    if (!b->len || b->ptr[b->len - 1] != '\n') buf_putc(b, '\n');
     for (int i = 0; i < calls->len; i++) {
         const tool_call *tc = &calls->v[i];
         const tool_schema_order *order =
@@ -6360,9 +6362,12 @@ static bool parse_glm_generated_message_ex(const char *text,
         return true;
     }
 
+    /* Content is trimmed for the client; retain its sampled trailing
+     * whitespace in the raw tool block so replay can restore it exactly. */
     const char *raw_block_start = start;
-    if (start >= text + 2 && start[-2] == '\n' && start[-1] == '\n') {
-        raw_block_start = start - 2;
+    while (raw_block_start > text &&
+           isspace((unsigned char)raw_block_start[-1])) {
+        raw_block_start--;
     }
     size_t content_len = trim_tool_separator_ws(text, 0,
                                                 (size_t)(raw_block_start - text));
@@ -18145,6 +18150,65 @@ static void test_render_glm_preserves_reasoning_with_tools(void) {
     chat_msgs_free(&msgs);
 }
 
+static void test_glm_raw_tool_call_keeps_sampled_boundary(void) {
+    const char *separators[] = {"", "\n", "\n\n", "\n\n\n", " \t\r\n"};
+    const char *block = "<tool_call>bash<arg_key>command</arg_key>"
+                        "<arg_value>pwd</arg_value></tool_call>";
+    for (int thinking = 0; thinking < 2; thinking++) {
+        for (int visible = 0; visible < 2; visible++) {
+            for (size_t i = 0; i < sizeof(separators) / sizeof(separators[0]); i++) {
+                buf generated = {0};
+                if (thinking) buf_puts(&generated, "thinking</think>");
+                if (visible) buf_puts(&generated, "Visible text.");
+                buf_puts(&generated, separators[i]);
+                buf_puts(&generated, block);
+                char *content = NULL, *reasoning = NULL;
+                tool_calls calls = {0};
+                TEST_ASSERT(parse_generated_message_ex_for_syntax(
+                    SERVER_MODEL_SYNTAX_GLM, generated.ptr, false,
+                    &content, &reasoning, &calls));
+                TEST_ASSERT(calls.len == 1);
+                TEST_ASSERT(content && !strcmp(content, visible ? "Visible text." : ""));
+                buf expected_raw = {0};
+                buf_puts(&expected_raw, separators[i]);
+                buf_puts(&expected_raw, block);
+                TEST_ASSERT(calls.raw_tool_text && !strcmp(calls.raw_tool_text, expected_raw.ptr));
+                request r;
+                request_init(&r, REQ_CHAT, 128);
+                r.model_syntax = SERVER_MODEL_SYNTAX_GLM;
+                r.think_mode = thinking ? DS4_THINK_HIGH : DS4_THINK_NONE;
+                char *suffix = build_tool_checkpoint_suffix(&r, content, reasoning, &calls);
+                TEST_ASSERT(suffix && !strcmp(suffix, generated.ptr));
+                free(suffix);
+                request_free(&r);
+                free(content);
+                free(reasoning);
+                tool_calls_free(&calls);
+                buf_free(&expected_raw);
+                buf_free(&generated);
+            }
+        }
+    }
+
+    /* Structured calls without sampled bytes still need a single separator. */
+    tool_calls calls = {0};
+    tool_call call = {0};
+    call.id = xstrdup("call_boundary");
+    call.name = xstrdup("bash");
+    call.arguments = xstrdup("{\"command\":\"pwd\"}");
+    tool_calls_push(&calls, call);
+    const char *contents[] = {"", "Visible text.", "Visible text.\n"};
+    for (size_t i = 0; i < sizeof(contents) / sizeof(contents[0]); i++) {
+        buf rendered = {0};
+        buf_puts(&rendered, contents[i]);
+        append_glm_tool_calls_text(&rendered, &calls, NULL);
+        const char *expected = i == 0 ? "\n<tool_call>" : "Visible text.\n<tool_call>";
+        TEST_ASSERT(rendered.ptr && !strncmp(rendered.ptr, expected, strlen(expected)));
+        buf_free(&rendered);
+    }
+    tool_calls_free(&calls);
+}
+
 static void test_render_glm_groups_tool_results(void) {
     chat_msgs msgs = {0};
     chat_msg user = {0};
@@ -22000,6 +22064,7 @@ static void ds4_server_unit_tests_run(void) {
     test_qwen_reasoning_effort_levels();
     test_render_glm_drops_old_reasoning_without_tools();
     test_render_glm_preserves_reasoning_with_tools();
+    test_glm_raw_tool_call_keeps_sampled_boundary();
     test_render_glm_groups_tool_results();
     test_tool_schema_order_from_anthropic_schema();
     test_tool_schema_order_from_openai_tools();
