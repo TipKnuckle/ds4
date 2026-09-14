@@ -74,6 +74,7 @@ endif
 ifeq ($(UNAME_S),Darwin)
 .PHONY: metal-decode-schedule-bench metal-prefill-variant-bench check-mxfp4-half-lut
 .PHONY: test-metal-moe-prefill test-metal-dense-mpp
+.PHONY: test-indexer-scorers
 
 all: ds4 ds4-server ds4-bench ds4-eval ds4-agent
 
@@ -84,6 +85,7 @@ help:
 	@echo "  make test         Build and run tests"
 	@echo "  make metal-decode-schedule-bench  Build the balanced Metal decode schedule benchmark"
 	@echo "  make metal-prefill-variant-bench  Build the balanced Metal prefill variant benchmark"
+	@echo "  make test-indexer-scorers  Compare all pre-M5 indexer scorers byte-for-byte"
 	@echo "  make check-mxfp4-half-lut  Verify the checked-in MXFP4 half LUT matches the generator"
 	@echo "  make test-mxfp4-metal  Check the MXFP4 half LUT, then run Metal MXFP4 exactness tests"
 	@echo "  make test-qwen4-kernels  Run the Qwen3.8 Metal kernel tests"
@@ -144,6 +146,15 @@ speed-bench/metal_prefill_variant_bench: speed-bench/metal_prefill_variant_bench
 	$(CC) $(CFLAGS) -o $@ $^ $(METAL_LDLIBS)
 
 metal-prefill-variant-bench: speed-bench/metal_prefill_variant_bench
+
+tests/test_indexer_scorers.o: tests/test_indexer_tiled4.c ds4_gpu.h
+	$(CC) $(CFLAGS) -I. -c -o $@ $<
+
+tests/test_indexer_scorers: tests/test_indexer_scorers.o $(CORE_OBJS)
+	$(CC) $(CFLAGS) -o $@ $^ $(METAL_LDLIBS)
+
+test-indexer-scorers: tests/test_indexer_scorers
+	./tests/test_indexer_scorers
 
 tests/test_mxfp4_metal.o: tests/test_mxfp4_metal.c ds4_gpu.h
 	$(CC) $(CFLAGS) -I. -c -o $@ $<
@@ -1018,6 +1029,7 @@ ds4_cpu_test_hooks.o ds4_cuda_test_hooks.o tests/test_session_state.o \
 tests/test_session_state_gpu.o: ds4_tool_text.h
 
 clean:
+	rm -f tests/test_indexer_scorers
 	rm -f tests/test_qwen4_ngrams
 	rm -f tests/test_qwen4_ngram_state
 	rm -f tests/test_web_recovery
