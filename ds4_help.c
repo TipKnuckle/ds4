@@ -360,6 +360,7 @@ static void print_server_thinking(FILE *fp, const help_colors *c) {
     para(fp, c, "DeepSeek-compatible chat requests default to high-effort thinking.");
     para(fp, c, "reasoning_effort=max or output_config.effort=max requests Think Max.");
     para(fp, c, "Requested thinking effort is independent of context size; context and output limits still bound generation.");
+    para(fp, c, "Plain V4 Flash uses the official 0731 low/high/max prompts. For older preview weights, set DS4_DEEPSEEK4_REASONING=preview before launch.");
     para(fp, c, "thinking={type:disabled}, think=false, or model=deepseek-chat selects non-thinking mode.");
     para(fp, c, "In thinking mode, client sampling knobs are ignored like the official API.");
     fputc('\n', fp);
